@@ -1,0 +1,53 @@
+class UID:
+    OWNER_ID = 705447976658665552
+
+class Server:
+    VNA_ID = 909880511701352488
+
+class Catagory:
+    ClanMembers = 909881910505898044
+    Staff_Ch = 1234042069991821386
+    Clan_Events = 1079194285028671559
+    
+class LogChannels:
+    Report = 1379534678507130880
+    Lotto_tracker = 910217280242188288
+    Library_logs = 1291855732714508382
+    Server_logs = 910117520508342292
+    Message_logs = 910116601553100840
+    Race_leaderboard = 1392755183875784776
+    Applications = 1379534678507130880  
+
+class PublicChannels:
+    Role_request = 1386221426637406259
+    Off_Topics = 910102221373456404
+    Library = 1381771105425035315
+    General = 910100575968952360
+    Quest_help = 923743471779586149
+    Roles = 910194993174556703
+    Poke_Spawn = 1405046884753608795
+    Rare_Spawns = 910081780143509544  
+
+class SpecialChannels:
+    YukiBasement = 1369749847397367948
+    Test_Channel = 1349024210923687956
+    Mod_BotChannel = 952810535928348732
+    Lotto_buy = 933270734447452220
+
+class ClanChannels:
+    Leaderboard = 1206242183418609664
+    Recruitment = 1381719158860943390
+    Donations = 915844798768894022
+    Clan_chat = 915844239080951869
+    Clan_info = 1147656385727840387
+
+class Roles:
+    Test = 1345640926063886416
+    Whitelist = 1375712535512354898
+    VNA_Staff = 1013464887021801614
+    VNA_Admin = 910081273119252500
+    Server_Booster = 915184699373125639
+    Giveaway_Ping = 910201241039159377
+    Giveaway_Host = 1147635733432115330
+    Spawn_Hunter = 1407425767410896966
+    Rare_Hunter = 1407425617322049586
