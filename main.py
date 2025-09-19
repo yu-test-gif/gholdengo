@@ -4,11 +4,10 @@ import os
 import discord
 from discord.ext import commands
 
-DEFAULT_GUILD_ID = 841888736559628298
-
 from keep_alive import keep_alive
-
 from utils.logs.pretty_logs import *
+
+DEFAULT_GUILD_ID = 841888736559628298
 
 # --- Configuration ---
 GUILD_ID = DEFAULT_GUILD_ID

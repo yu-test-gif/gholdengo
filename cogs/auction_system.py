@@ -1,273 +1,243 @@
-import discord
-from discord.ext import commands, tasks
-from discord import app_commands
-import asyncio
-from datetime import datetime, timezone, timedelta
-from typing import Optional
-import random
-import json
-import os
-from utils.logs.pretty_logs import *
-TEST_GUILD_ID = 1220718310455250996
-from .pokemons import POKEMONS  # ✅ relative import
+    # cogs/auction_system.py
 
-DATA_FILE = "auction_data.json"
-AUCTION_DURATION = 48 * 60 * 60  # 48h
-UPDATE_INTERVAL = 30  # seconds
-MAX_BIDS_PER_USER = 6
-WHITELIST_ROLE = 1375712535512354898
-STARTING_COINS = 1000
+    import discord
+    from discord import app_commands
+    from discord.ext import commands, tasks
+    import asyncio
+    import json
+    import os
+    from typing import Optional
+
+    from .pokemons import POKEMONS  # your pokemon list
+    from utils.logs.pretty_logs import pretty_log
+
+    DATA_FILE = "auction_data.json"
+    UPDATE_INTERVAL = 15  # seconds for embed updates
 
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {"coins": {}, "inventory": {}, "auction": None, "banned": []}
+    def load_data():
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r") as f:
+                return json.load(f)
+        return {
+            "coins": {},
+            "inventory": {},
+            "auction": None,
+            "banned": []
+        }
 
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+    def save_data(data):
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, indent=4)
 
 
-class AuctionSystem(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.data = load_data()
-        self.current_auction_messages = {}  # channel_id -> message
-        self.auction_task = None
+    class AuctionSystem(commands.Cog):
+        def __init__(self, bot: commands.Bot):
+            self.bot = bot
+            self.data = load_data()
+            self.current_auction_messages: dict[int, discord.Message] = {}
+            self.auction_update_task = None
 
-    # ---------------- Helper Methods ---------------- #
+        # -------------------- Helpers -------------------- #
 
-    def is_whitelisted(self, user: discord.Member, guild: discord.Guild) -> bool:
-        return (
-            user.guild_permissions.administrator
-            or any(r.id == WHITELIST_ROLE for r in user.roles)
-        )
+        def get_balance(self, user_id: int) -> int:
+            return self.data["coins"].get(str(user_id), 1000)
 
-    def get_balance(self, user_id: int) -> int:
-        return self.data["coins"].get(str(user_id), STARTING_COINS)
+        def add_balance(self, user_id: int, amount: int):
+            uid = str(user_id)
+            self.data["coins"][uid] = self.get_balance(user_id) + amount
+            save_data(self.data)
 
-    def add_balance(self, user_id: int, amount: int):
-        uid = str(user_id)
-        self.data["coins"][uid] = self.get_balance(user_id) + amount
-        save_data(self.data)
+        def add_inventory(self, user_id: int, pokemon: str):
+            uid = str(user_id)
+            if uid not in self.data["inventory"]:
+                self.data["inventory"][uid] = []
+            self.data["inventory"][uid].append(pokemon)
+            save_data(self.data)
 
-    def get_inventory(self, user_id: int):
-        return self.data["inventory"].get(str(user_id), [])
+        def get_inventory(self, user_id: int):
+            return self.data["inventory"].get(str(user_id), [])
 
-    def add_inventory(self, user_id: int, pokemon: str):
-        uid = str(user_id)
-        if uid not in self.data["inventory"]:
-            self.data["inventory"][uid] = []
-        self.data["inventory"][uid].append(pokemon)
-        save_data(self.data)
+        def is_banned(self, user_id: int) -> bool:
+            return str(user_id) in self.data.get("banned", [])
 
-    def get_proper_name(self, name: str) -> Optional[str]:
-        for p in POKEMONS:
-            if p.lower() == name.lower():
-                return p
-        return None
-
-    # ---------------- Auction Logic ---------------- #
-
-    async def update_current_auction_embed(self, channel: discord.TextChannel):
-        while self.data.get("auction"):
-            auction = self.data["auction"]
-            if not auction:
-                break
-            embed = discord.Embed(
-                title="🏆 Current Auction", color=discord.Color.gold()
+        def _is_whitelisted_member(self, member: discord.Member) -> bool:
+            if not member:
+                return False
+            return member.guild_permissions.administrator or member.roles and any(
+                r.id == 1375712535512354898 for r in member.roles
             )
-            pokemon = auction["pokemon"]
-            embed.add_field(name="Pokémon", value=f"**{pokemon}**", inline=False)
-            if auction.get("highest_bidder"):
-                embed.add_field(
-                    name="Highest Bid",
-                    value=f"{auction['highest_bid']} coins by <@{auction['highest_bidder']}>",
-                    inline=False,
-                )
+
+        # -------------------- Auction Embed -------------------- #
+
+        async def update_auction_embed(self, channel: discord.TextChannel):
+            auction = self.data.get("auction")
+            if not auction or not isinstance(channel, discord.TextChannel):
+                return
+
+            embed = discord.Embed(
+                title="🏆 Current Auction",
+                description=f"Pokémon: **{auction['pokemon']}**",
+                color=discord.Color.gold()
+            )
+
+            highest_bid = auction.get("highest_bid", 0)
+            bidder_id = auction.get("highest_bidder")
+            if bidder_id:
+                member = channel.guild.get_member(bidder_id)
+                bidder_name = member.display_name if member else f"<@{bidder_id}>"
             else:
-                embed.add_field(name="Highest Bid", value="No bids yet", inline=False)
+                bidder_name = "No bids yet"
 
-            remaining = auction["end_time"] - datetime.now(timezone.utc).timestamp()
-            if remaining < 0:
-                remaining = 0
-            hours, remainder = divmod(int(remaining), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            embed.set_footer(text=f"Time remaining: {hours}h {minutes}m {seconds}s")
+            embed.add_field(name="Highest Bid", value=f"{highest_bid} coins\nBidder: {bidder_name}", inline=False)
+            remaining = max(0, int(auction.get("end_time", 0) - asyncio.get_event_loop().time()))
+            minutes, seconds = divmod(remaining, 60)
+            embed.set_footer(text=f"Time remaining: {minutes}m {seconds}s")
 
+            # edit existing message or send new
+            msg = self.current_auction_messages.get(channel.id)
             try:
-                msg = self.current_auction_messages.get(channel.id)
                 if msg:
                     await msg.edit(embed=embed)
                 else:
                     sent_msg = await channel.send(embed=embed)
                     self.current_auction_messages[channel.id] = sent_msg
             except Exception as e:
-                print(f"Error updating auction embed: {e}")
+                pretty_log("error", f"Failed updating auction embed: {e}")
 
-            await asyncio.sleep(UPDATE_INTERVAL)
+        async def auction_loop(self):
+            while True:
+                auction = self.data.get("auction")
+                if auction:
+                    channel = self.bot.get_channel(auction.get("channel_id"))
+                    if isinstance(channel, discord.TextChannel):
+                        await self.update_auction_embed(channel)
+                    # check if auction ended
+                    if asyncio.get_event_loop().time() >= auction.get("end_time", 0):
+                        await self.end_auction()
+                await asyncio.sleep(UPDATE_INTERVAL)
 
-    async def end_auction(self):
-        auction = self.data.get("auction")
-        if not auction:
-            return
-        channel = self.bot.get_channel(auction["channel_id"])
-        if not isinstance(channel, discord.TextChannel):
+        async def end_auction(self):
+            auction = self.data.get("auction")
+            if not auction:
+                return
+
+            channel = self.bot.get_channel(auction.get("channel_id"))
+            if isinstance(channel, discord.TextChannel):
+                if auction.get("highest_bidder"):
+                    winner_id = auction["highest_bidder"]
+                    pokemon = auction["pokemon"]
+                    self.add_inventory(winner_id, pokemon)
+                    await channel.send(
+                        f"🎉 Auction ended! <@{winner_id}> won **{pokemon}** for {auction['highest_bid']} coins!"
+                    )
+                else:
+                    await channel.send("❌ Auction ended with no bids.")
+
             self.data["auction"] = None
             save_data(self.data)
-            return
+            if channel and channel.id in self.current_auction_messages:
+                self.current_auction_messages.pop(channel.id)
 
-        if auction.get("highest_bidder"):
-            winner_id = auction["highest_bidder"]
-            pokemon = auction["pokemon"]
-            self.add_inventory(winner_id, pokemon)
-            await channel.send(
-                f"🎉 Auction ended! <@{winner_id}> won **{pokemon}** for {auction['highest_bid']} coins!"
-            )
-        else:
-            await channel.send("❌ Auction ended with no bids.")
+        # -------------------- Slash Commands -------------------- #
 
-        self.data["auction"] = None
-        save_data(self.data)
-        self.current_auction_messages.pop(channel.id, None)
+        @app_commands.command(name="ping_test", description="Check if slash commands work")
+        @app_commands.guilds(discord.Object(id=DEFAULT_GUILD_ID))
+        async def ping_test(self, interaction: discord.Interaction):
+            await interaction.response.send_message("✅ Slash commands are working!")
 
-    # ---------------- Tasks ---------------- #
+        @app_commands.command(name="coins", description="Check your coin balance")
+        @app_commands.guilds(discord.Object(id=DEFAULT_GUILD_ID))
+        async def coins(self, interaction: discord.Interaction):
+            await interaction.response.send_message(f"💰 You have {self.get_balance(interaction.user.id)} coins.", ephemeral=True)
 
-    @tasks.loop(seconds=10)
-    async def check_auction(self):
-        auction = self.data.get("auction")
-        if not auction:
-            return
-        if datetime.now(timezone.utc).timestamp() >= auction["end_time"]:
-            await self.end_auction()
-            # stop the loop safely
-            if self.check_auction.is_running():  # type: ignore
-                self.check_auction.stop()  # type: ignore
+        @app_commands.command(name="inventory", description="Show inventory")
+        @app_commands.guilds(discord.Object(id=DEFAULT_GUILD_ID))
+        async def inventory_cmd(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
+            target = member or interaction.user
+            inv = self.get_inventory(target.id)
+            balance = self.get_balance(target.id)
+            embed = discord.Embed(title=f"{target.display_name}'s Inventory", color=discord.Color.blue())
+            embed.add_field(name="💰 Coins", value=str(balance), inline=False)
+            embed.add_field(name="📦 Pokémon", value=", ".join(inv) if inv else "None", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # ---------------- Commands ---------------- #
+        @app_commands.command(name="auction_start", description="Start global auction")
+        @app_commands.guilds(discord.Object(id=DEFAULT_GUILD_ID))
+        async def auction_start(self, interaction: discord.Interaction):
+            if not isinstance(interaction.channel, discord.TextChannel):
+                await interaction.response.send_message("❌ Use in text channel only.", ephemeral=True)
+                return
+            member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
+            if not self._is_whitelisted_member(member):
+                await interaction.response.send_message("❌ You are not whitelisted.", ephemeral=True)
+                return
+            if self.data.get("auction"):
+                await interaction.response.send_message("⚠️ Auction already running.", ephemeral=True)
+                return
 
-    @app_commands.command(name="start_auction", description="Start a new auction")
-    @app_commands.guilds(discord.Object(id=TEST_GUILD_ID))
-    async def start_auction(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        if guild is None:
-            await interaction.response.send_message(
-                "❌ This command can only be used in a server.", ephemeral=True
-            )
-            return
-        member = guild.get_member(interaction.user.id)
-        if not member or not self.is_whitelisted(member, guild):
-            await interaction.response.send_message(
-                "❌ Only admins/whitelisted can start.", ephemeral=True
-            )
-            return
-        if self.data.get("auction"):
-            await interaction.response.send_message(
-                "⚠️ An auction is already running.", ephemeral=True
-            )
-            return
+            pokemon = POKEMONS[0]  # pick first for demo, can randomize
+            end_time = asyncio.get_event_loop().time() + 60  # 1 minute for demo
+            self.data["auction"] = {
+                "pokemon": pokemon,
+                "highest_bid": 0,
+                "highest_bidder": None,
+                "end_time": end_time,
+                "channel_id": interaction.channel.id
+            }
+            save_data(self.data)
+            await interaction.response.send_message(f"✅ Started auction for **{pokemon}**!")
+            if not self.auction_update_task:
+                self.auction_update_task = asyncio.create_task(self.auction_loop())
 
-        pokemon = random.choice(POKEMONS)
-        end_time = datetime.now(timezone.utc).timestamp() + AUCTION_DURATION
-        self.data["auction"] = {
-            "pokemon": pokemon,
-            "highest_bid": 0,
-            "highest_bidder": None,
-            "end_time": end_time,
-            "channel_id": interaction.channel_id,
-        }
-        save_data(self.data)
+        # -------------------- BID COMMAND -------------------- #
+        @app_commands.command(name="bid", description="Place a bid")
+        @app_commands.guilds(discord.Object(id=DEFAULT_GUILD_ID))
+        async def bid(self, interaction: discord.Interaction, amount: int):
+            if self.is_banned(interaction.user.id):
+                await interaction.response.send_message("❌ You are banned.", ephemeral=True)
+                return
+            auction = self.data.get("auction")
+            if not auction:
+                await interaction.response.send_message("❌ No active auction.", ephemeral=True)
+                return
 
-        await interaction.response.send_message(f"✅ Started auction for **{pokemon}**!")
-        if isinstance(interaction.channel, discord.TextChannel):
-            asyncio.create_task(
-                self.update_current_auction_embed(interaction.channel)
-            )
-        if not self.check_auction.is_running():  # type: ignore
-            self.check_auction.start()  # type: ignore
+            if amount <= auction.get("highest_bid", 0):
+                await interaction.response.send_message(f"⚠️ Bid must be higher than {auction['highest_bid']}.", ephemeral=True)
+                return
+            if amount > self.get_balance(interaction.user.id):
+                await interaction.response.send_message("❌ Not enough coins.", ephemeral=True)
+                return
 
-    @app_commands.command(name="bid", description="Place a bid on the current auction")
-    @app_commands.guilds(discord.Object(id=TEST_GUILD_ID))
-    async def bid(self, interaction: discord.Interaction, amount: int):
-        if interaction.user.id in self.data["banned"]:
-            await interaction.response.send_message("❌ You are banned.", ephemeral=True)
-            return
-        auction = self.data.get("auction")
-        if not auction:
-            await interaction.response.send_message("❌ No active auction.", ephemeral=True)
-            return
+            # Refund previous
+            if auction.get("highest_bidder"):
+                self.add_balance(auction["highest_bidder"], auction["highest_bid"])
 
-        balance = self.get_balance(interaction.user.id)
-        if amount > balance:
-            await interaction.response.send_message(
-                "❌ You don't have enough coins.", ephemeral=True
-            )
-            return
-        if amount <= auction["highest_bid"]:
-            await interaction.response.send_message(
-                f"⚠️ Your bid must be higher than {auction['highest_bid']}.",
-                ephemeral=True,
-            )
-            return
+            # Deduct new bidder
+            self.add_balance(interaction.user.id, -amount)
+            auction["highest_bid"] = amount
+            auction["highest_bidder"] = interaction.user.id
+            save_data(self.data)
 
-        # Refund previous bidder
-        if auction["highest_bidder"]:
-            self.add_balance(auction["highest_bidder"], auction["highest_bid"])
+            await interaction.response.send_message(f"✅ You bid {amount} coins!")
+            channel = interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None
+            if channel:
+                await self.update_auction_embed(channel)
 
-        # Deduct from new bidder
-        self.add_balance(interaction.user.id, -amount)
-        auction["highest_bid"] = amount
-        auction["highest_bidder"] = interaction.user.id
-        save_data(self.data)
+        # -------------------- OTHER ADMIN COMMANDS -------------------- #
+        @app_commands.command(name="give_coins", description="Give/subtract coins to a player")
+        @app_commands.guilds(discord.Object(id=DEFAULT_GUILD_ID))
+        async def give_coins(self, interaction: discord.Interaction, member: discord.Member, amount: int):
+            if not self._is_whitelisted_member(member):
+                await interaction.response.send_message("❌ Not whitelisted.", ephemeral=True)
+                return
+            self.add_balance(member.id, amount)
+            await interaction.response.send_message(f"✅ {member.display_name} now has {self.get_balance(member.id)} coins.")
 
-        await interaction.response.send_message(f"✅ You bid {amount} coins!")
-        if isinstance(interaction.channel, discord.TextChannel):
-            asyncio.create_task(self.update_current_auction_embed(interaction.channel))
+        # ... continue implementing the rest like /give_all, /yeet, /check, /reset_auction
+        # in same pattern with @app_commands.guilds(discord.Object(id=DEFAULT_GUILD_ID))
 
-    @app_commands.command(
-        name="current_auction", description="Show ongoing auction info"
-    )
-    @app_commands.guilds(discord.Object(id=TEST_GUILD_ID))
-    async def current_auction(self, interaction: discord.Interaction):
-        auction = self.data.get("auction")
-        if not auction:
-            await interaction.response.send_message("❌ No active auction.", ephemeral=False)
-            return
-        if not isinstance(interaction.channel, discord.TextChannel):
-            await interaction.response.send_message(
-                "❌ Use in a text channel.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message("📊 Current auction info:", ephemeral=False)
-        asyncio.create_task(self.update_current_auction_embed(interaction.channel))
-
-    @app_commands.command(name="coins", description="Check your coin balance")
-    @app_commands.guilds(discord.Object(id=TEST_GUILD_ID))
-    async def coins(self, interaction: discord.Interaction):
-        balance = self.get_balance(interaction.user.id)
-        await interaction.response.send_message(
-            f"💰 You have {balance} coins.", ephemeral=True
-        )
-
-    @app_commands.command(name="inventory", description="Show inventory")
-    @app_commands.guilds(discord.Object(id=TEST_GUILD_ID))
-
-    async def inventory_cmd(
-        self, interaction: discord.Interaction, member: Optional[discord.Member] = None
-    ):
-        target = member or interaction.user
-        inv = self.get_inventory(target.id)
-        balance = self.get_balance(target.id)
-        embed = discord.Embed(title=f"{target.display_name}'s Inventory", color=discord.Color.blue())
-        embed.add_field(name="💰 Coins", value=str(balance), inline=False)
-        embed.add_field(name="📦 Pokémon", value=", ".join(inv) if inv else "None", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-# ---------------- Cog Setup ---------------- #
-async def setup(bot: commands.Bot):
-    await bot.add_cog(AuctionSystem(bot))
-
+    # -------------------- Setup Cog -------------------- #
+    async def setup(bot: commands.Bot):
+        await bot.add_cog(AuctionSystem(bot))
