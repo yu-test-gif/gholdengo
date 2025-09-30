@@ -10,3 +10,5 @@ class CoinEmotes:
   A_SILVER = "<a:s_coin:1395547212477632622>"
   A_GOLD = "<a:g_coin:1395547194509103135>"
   A_PLATINUM = "<a:p_coin:1395547199240273960>"
+
+Gimmighoul_coin = "<:gimmighoul_coin:1422225055643074570>"
