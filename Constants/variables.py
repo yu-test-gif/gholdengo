@@ -1,18 +1,23 @@
-DEFAULT_GUILD_ID = 909880511701352488
-
+# DEFAULT_GUILD_ID = 909880511701352488
+DEFAULT_GUILD_ID = 1322298030908772473
 DATA_DIR = "data"
+COMPACT_LINES_PER_PAGE = 20  # how many auctions to show per page
+
 
 class UID:
     OWNER_ID = 705447976658665552
 
+
 class Server:
     VNA_ID = 909880511701352488
+
 
 class Catagory:
     ClanMembers = 909881910505898044
     Staff_Ch = 1234042069991821386
     Clan_Events = 1079194285028671559
-    
+
+
 class LogChannels:
     Report = 1379534678507130880
     Lotto_tracker = 910217280242188288
@@ -20,7 +25,8 @@ class LogChannels:
     Server_logs = 910117520508342292
     Message_logs = 910116601553100840
     Race_leaderboard = 1392755183875784776
-    Applications = 1379534678507130880  
+    Applications = 1379534678507130880
+
 
 class PublicChannels:
     Role_request = 1386221426637406259
@@ -30,13 +36,15 @@ class PublicChannels:
     Quest_help = 923743471779586149
     Roles = 910194993174556703
     Poke_Spawn = 1405046884753608795
-    Rare_Spawns = 910081780143509544  
+    Rare_Spawns = 910081780143509544
+
 
 class SpecialChannels:
     YukiBasement = 1369749847397367948
     Test_Channel = 1349024210923687956
     Mod_BotChannel = 952810535928348732
     Lotto_buy = 933270734447452220
+
 
 class ClanChannels:
     Leaderboard = 1206242183418609664
@@ -45,9 +53,10 @@ class ClanChannels:
     Clan_chat = 915844239080951869
     Clan_info = 1147656385727840387
 
+
 class Roles:
     Test = 1345640926063886416
-    Whitelist = 1375712535512354898
+    Whitelist = 1331915551802654750
     VNA_Staff = 1013464887021801614
     VNA_Admin = 910081273119252500
     Server_Booster = 915184699373125639
