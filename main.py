@@ -1,70 +1,70 @@
-import asyncio
+# main.py
 import os
-
+import asyncio
 import discord
 from discord.ext import commands
+from discord import app_commands
 
-from keep_alive import keep_alive
-from utils.logs.pretty_logs import *
+from Constants.variables import DEFAULT_GUILD_ID, DATA_DIR
+from pretty_logs import pretty_log
 
-DEFAULT_GUILD_ID = 841888736559628298
-
-# --- Configuration ---
-GUILD_ID = DEFAULT_GUILD_ID
-
-# --- Intents ---
+# ---- Intents / Bot ----
 intents = discord.Intents.default()
-intents.message_content = True
 intents.members = True
-intents.guilds = True
+intents.message_content = True
 
-# --- Bot setup ---
-bot = commands.Bot(command_prefix="!", intents=intents)
-set_ghouldengo_bot(bot=bot)
+bot = commands.Bot(command_prefix=";", intents=intents)
 
+# ---- Simple health check command ----
+@bot.tree.command(name="ping_test", description="Check if the bot is alive")
+@app_commands.guilds(discord.Object(id=DEFAULT_GUILD_ID))
+async def ping_test(interaction: discord.Interaction):
+    await interaction.response.send_message("🏓 Pong!", ephemeral=True)
 
-# --- on_ready event ---
+# ---- Lifecycle ----
 @bot.event
 async def on_ready():
-    pretty_log("info", f"Bot is online as {bot.user}")
+    # Guard for type checker: bot.user may be Optional
+    user = bot.user
+    if user is None:
+        pretty_log("info", "Bot is online (user not yet cached).")
+    else:
+        pretty_log("info", f"Bot online as {user} (ID: {user.id})")
 
-    # Sync slash commands for your guild
     try:
-        guild = discord.Object(id=GUILD_ID)
-        synced = await bot.tree.sync(guild=guild)
-        pretty_log("info", f"Synced {len(synced)} guild commands to {guild.id}")
+        # Fast guild-only sync
+        await bot.tree.sync(guild=discord.Object(id=DEFAULT_GUILD_ID))
+        pretty_log("info", f"Slash commands synced to guild {DEFAULT_GUILD_ID}")
     except Exception as e:
-        pretty_log("error", f"Error syncing slash commands: {e}")
+        pretty_log("error", f"Slash sync failed: {e}")
 
-
-# --- Test slash command ---
-@bot.tree.command(name="ping_test", description="Check if slash commands work")
-async def ping_test(interaction: discord.Interaction):
-    await interaction.response.send_message("✅ Slash commands are working!")
-
-
-# --- Load cogs ---
-async def load_cogs():
     try:
-        await bot.load_extension("cogs.auction_system")
-        pretty_log("info", "Loaded cog: cogs.auction_system")
-    except Exception as e:
-        pretty_log("error", f"Failed to load cog: {e}")
+        await bot.change_presence(activity=discord.Game(name="/auction_list • /auction_bid"))
+    except Exception:
+        pass
 
-
-# --- Start bot ---
+# ---- Boot ----
 async def main():
-    keep_alive()
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except Exception:
+        pass
+
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        raise ValueError("❌ DISCORD_TOKEN environment variable not set!")
+        raise RuntimeError("❌ DISCORD_TOKEN environment variable is not set.")
 
-    async with bot:
-        await load_cogs()
-        pretty_log("info", "Starting bot with token...")
+    try:
+        await bot.load_extension("cogs.auctions")
+        pretty_log("info", "Loaded extension: cogs.auctions")
+    except Exception as e:
+        pretty_log("error", f"Failed to load cogs.auctions: {e}")
+        raise
 
-        await bot.start(token)
-
+    await bot.start(token)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pretty_log("info", "Shutting down...")
